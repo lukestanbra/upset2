@@ -16,13 +16,15 @@ library(cowplot)
 #' @export
 #'
 #' @examples
-prepare_data <- function(data, set_vars, n_intersections = 10,
+prepare_data <- function(data, set_vars, intersection_group_var,
+                         is_summarised = FALSE, n_intersections = 10,
                          show_empty_sets = FALSE,
                          intersection_order = c("original", "descending"),
                          set_order = c("original", "descending"),
                          intersection_colour_fn = function(x) "black") {
   # Quote arguments -----
   set_vars <- enquo(set_vars)
+  intersection_group_var <- enquo(intersection_group_var)
 
   # Helper functions -----
   order_intersections <- function(df, intersection_order) {
@@ -58,14 +60,23 @@ prepare_data <- function(data, set_vars, n_intersections = 10,
       ungroup()
   }
 
+  # Summarise if not already ----
+  if(!is_summarised) {
+    summarised_data <- data %>%
+      group_by_at(., vars(!!intersection_group_var, !!set_vars)) %>%
+      summarise(intersection_count = n()) %>%
+      ungroup() %>%
+      mutate(intersection_id = apply(select_at(., vars(!!set_vars)), 1, function(x) sum(x * 2^(0:(length(x)-1))) )) %>%
+      ungroup()
+  } else {
+    summarised_data <- data %>%
+      mutate(intersection_id = apply(select_at(., vars(!!set_vars)), 1, function(x) sum(x * 2^(0:(length(x)-1))) ))
+  }
+
   # Main body -----
-  data %>%
-    group_by_at(., vars(!!set_vars)) %>%
-    summarise(intersection_count = n()) %>%
-    ungroup() %>%
+  summarised_data %>%
     order_intersections(., intersection_order) %>%
-    rownames_to_column(var = "intersection_id") %>%
-    gather(key = "set_name", value = "is_member", -intersection_id, -intersection_count) %>%
+    gather(key = "set_name", value = "is_member", -intersection_id, -!!intersection_group_var, -intersection_count) %>%
     mutate(set_name = factor(set_name),
            is_member_fct = factor(is_member),
            intersection_id = as.numeric(as.character(intersection_id))) %>%
@@ -86,11 +97,13 @@ prepare_data <- function(data, set_vars, n_intersections = 10,
 #' @export
 #'
 #' @examples
-make_vertical_bar_plot <- function(data) {
+make_vertical_bar_plot <- function(data, intersection_group_var, ...) {
+  intersection_group_var <- enquo(intersection_group_var)
+
   data %>%
-    distinct(intersection_id, intersection_count) %>% {
+    distinct(intersection_id, intersection_count, intersection_group_var) %>% {
         ggplot(data = .) +
-          geom_bar(aes(x = intersection_id, y = intersection_count),
+          geom_bar(aes(x = intersection_id, y = intersection_count, fill = !!intersection_group_var),
                    stat='identity') +
           geom_text(aes(x = intersection_id, y = intersection_count,
                         label = scales::number_format(big.mark = ",")(intersection_count)),
@@ -142,20 +155,20 @@ make_horizontal_bar_plot <- function(data) {
 #' @export
 #'
 #' @examples
-make_matrix_plot <- function(data, palette = viridis::viridis_pal()) {
+make_matrix_plot <- function(data, colour_palette = viridis::viridis_pal()) {
 
   ggplot(data = data,
          aes(x = intersection_id,
              y = set_number)) +
     geom_point(
-      aes(colour = ifelse(is_member, intersection_colour, is_member),
+      aes(colour = if_else(is_member == 1, intersection_colour %>% as.character(), is_member_fct %>% as.character()),
           alpha = (0.5 + is_member)),
       shape = 16,
       size = 3) +
     geom_line(
       aes(group = interaction(is_member_fct, intersection_id),
           alpha = 1.5 * is_member,
-          colour = is_member_fct),
+          colour = if_else(is_member == 1, intersection_colour %>% as.character(), is_member_fct %>% as.character())),
       size = 1) +
     geom_rect(
       data = tibble(ymin = unique(data$set_number[which(data$set_number %% 2 == 1)] - 0.5),
@@ -169,7 +182,7 @@ make_matrix_plot <- function(data, palette = viridis::viridis_pal()) {
           fill = "black",
           alpha = 0.1)) +
     scale_color_manual(name = NULL,
-                       palette = palette) +
+                       palette = colour_palette) +
     scale_fill_identity() +
     scale_x_continuous(name = "   ",
                        labels = NULL,
@@ -200,7 +213,7 @@ make_upset_plot <- function(data, ...) {
   prepare_data(data, ...) %>% {
     plot_grid(
       NULL,
-      make_vertical_bar_plot(.),
+      make_vertical_bar_plot(., ...),
       make_horizontal_bar_plot(.),
       make_matrix_plot(.),
       rel_widths = c(1,2),
@@ -213,20 +226,36 @@ make_upset_plot <- function(data, ...) {
 
 movies <- read_delim("inst/extdata/movies.csv", ";")
 
-make_upset_plot(movies, Action:Western,  n_intersections = 20,
+make_upset_plot(movies, Action:Western, is_summarised = FALSE,
+                n_intersections = 20,
                 show_empty_sets = FALSE,
                 intersection_order = "descending",
                 set_order = "descending",
-                intersection_colour_fn = length)
+                intersection_colour_fn = function(set_vector) length(set_vector)
+                )
+movies %>%
+  mutate(decade = floor(ReleaseDate/10)*10) %>%
+  make_upset_plot(., Action:Western, decade,
+               is_summarised = FALSE,
+                n_intersections = 10,
+                show_empty_sets = FALSE,
+                intersection_order = "descending",
+                set_order = "descending",
+                intersection_colour_fn = function(set_vector) length(set_vector)
+                )
 
 prepare_data(movies, Action:Western,
-             intersection_colour_fn = length) %>%
-  make_matrix_plot()
+             intersection_colour_fn = function(set_names) setequal(set_names, c("Western", "Romance"))) %>%
+  make_matrix_plot(colour_palette = function(n) c(rep("Black", n-1), "Red"))
 
 
 
 
+printx <- function(...) {
+  list(...)$x
+}
 
+printx(x = 1, y = 2)
 
 
 
